@@ -8,6 +8,7 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
@@ -26,7 +27,9 @@ import com.github.tvbox.osc.picasso.RoundTransformation;
 import com.github.tvbox.osc.ui.adapter.SeriesAdapter;
 import com.github.tvbox.osc.ui.adapter.SeriesFlagAdapter;
 import com.github.tvbox.osc.ui.dialog.QuickSearchDialog;
+import com.github.tvbox.osc.util.DefaultConfig;
 import com.github.tvbox.osc.util.FastClickCheckUtil;
+import com.github.tvbox.osc.util.MD5;
 import com.github.tvbox.osc.viewmodel.SourceViewModel;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -42,6 +45,7 @@ import com.squareup.picasso.Picasso;
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
+import org.json.JSONObject;
 
 import java.net.URLEncoder;
 import java.util.ArrayList;
@@ -69,7 +73,9 @@ public class DetailActivity extends BaseActivity {
     private TextView tvDirector;
     private TextView tvDes;
     private TextView tvPlay;
+    private TextView tvSort;
     private TextView tvQuickSearch;
+    private TextView tvCollect;
     private TvRecyclerView mGridViewFlag;
     private TvRecyclerView mGridView;
     private LinearLayout mEmptyPlayList;
@@ -109,6 +115,8 @@ public class DetailActivity extends BaseActivity {
         tvDirector = findViewById(R.id.tvDirector);
         tvDes = findViewById(R.id.tvDes);
         tvPlay = findViewById(R.id.tvPlay);
+        tvSort = findViewById(R.id.tvSort);
+        tvCollect = findViewById(R.id.tvCollect);
         tvQuickSearch = findViewById(R.id.tvQuickSearch);
         mEmptyPlayList = findViewById(R.id.mEmptyPlaylist);
         mGridView = findViewById(R.id.mGridView);
@@ -121,6 +129,17 @@ public class DetailActivity extends BaseActivity {
         mGridViewFlag.setLayoutManager(new V7LinearLayoutManager(this.mContext, 0, false));
         seriesFlagAdapter = new SeriesFlagAdapter();
         mGridViewFlag.setAdapter(seriesFlagAdapter);
+        tvSort.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (vodInfo != null && vodInfo.seriesMap.size() > 0) {
+                    vodInfo.reverseSort = !vodInfo.reverseSort;
+                    vodInfo.reverse();
+                    insertVod(sourceKey, vodInfo);
+                    seriesAdapter.notifyDataSetChanged();
+                }
+            }
+        });
         tvPlay.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -136,6 +155,13 @@ public class DetailActivity extends BaseActivity {
                 EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH, quickSearchData));
                 EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH_WORD, quickSearchWord));
                 quickSearchDialog.show();
+            }
+        });
+        tvCollect.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                RoomDataManger.insertVodCollect(sourceKey, vodInfo);
+                Toast.makeText(DetailActivity.this, "已加入收藏夹", Toast.LENGTH_SHORT).show();
             }
         });
         mGridView.setOnItemListener(new TvRecyclerView.OnItemListener() {
@@ -155,13 +181,7 @@ public class DetailActivity extends BaseActivity {
             }
         });
         mGridViewFlag.setOnItemListener(new TvRecyclerView.OnItemListener() {
-            @Override
-            public void onItemPreSelected(TvRecyclerView parent, View itemView, int position) {
-
-            }
-
-            @Override
-            public void onItemSelected(TvRecyclerView parent, View itemView, int position) {
+            private void refresh(View itemView, int position) {
                 String newFlag = seriesFlagAdapter.getData().get(position).name;
                 if (vodInfo != null && !vodInfo.playFlag.equals(newFlag)) {
                     for (int i = 0; i < vodInfo.seriesFlags.size(); i++) {
@@ -182,14 +202,18 @@ public class DetailActivity extends BaseActivity {
             }
 
             @Override
-            public void onItemClick(TvRecyclerView parent, View itemView, int position) {
+            public void onItemPreSelected(TvRecyclerView parent, View itemView, int position) {
 
             }
-        });
-        seriesFlagAdapter.setOnItemClickListener(new BaseQuickAdapter.OnItemClickListener() {
+
             @Override
-            public void onItemClick(BaseQuickAdapter adapter, View view, int position) {
-                FastClickCheckUtil.check(view);
+            public void onItemSelected(TvRecyclerView parent, View itemView, int position) {
+                refresh(itemView, position);
+            }
+
+            @Override
+            public void onItemClick(TvRecyclerView parent, View itemView, int position) {
+                refresh(itemView, position);
             }
         });
         seriesAdapter.setOnItemClickListener(new BaseQuickAdapter.OnItemClickListener() {
@@ -242,6 +266,21 @@ public class DetailActivity extends BaseActivity {
         }, 100);
     }
 
+    private void setTextShow(TextView view, String tag, String info) {
+        if (info == null || info.trim().isEmpty()) {
+            view.setVisibility(View.GONE);
+            return;
+        }
+        view.setVisibility(View.VISIBLE);
+        view.setText(Html.fromHtml(getHtml(tag, info)));
+    }
+
+    private String removeHtmlTag(String info) {
+        if (info == null)
+            return "";
+        return info.replaceAll("\\<.*?\\>", "").replaceAll("\\s", "");
+    }
+
     private void initViewModel() {
         sourceViewModel = new ViewModelProvider(this).get(SourceViewModel.class);
         sourceViewModel.detailResult.observe(this, new Observer<AbsXml>() {
@@ -255,32 +294,26 @@ public class DetailActivity extends BaseActivity {
                     vodInfo.sourceKey = mVideo.sourceKey;
 
                     tvName.setText(mVideo.name);
-                    tvSite.setText(Html.fromHtml(getHtml("来源：", mVideo.sourceKey)));
-                    for (SourceBean sourceBean : ApiConfig.get().getSourceBeanList()) {
-                        if (sourceBean.getKey().equals(mVideo.sourceKey)) {
-                            tvSite.setText(Html.fromHtml(getHtml("来源：", sourceBean.getName())));
-                            break;
-                        }
-                    }
-                    tvYear.setText(Html.fromHtml(getHtml("年份：", String.valueOf(mVideo.year))));
-                    tvArea.setText(Html.fromHtml(getHtml("地区：", mVideo.area)));
-                    tvLang.setText(Html.fromHtml(getHtml("语言：", mVideo.lang)));
-                    tvType.setText(Html.fromHtml(getHtml("类型：", mVideo.type)));
-                    tvActor.setText(Html.fromHtml(getHtml("演员：", mVideo.actor)));
-                    tvDirector.setText(Html.fromHtml(getHtml("导演：", mVideo.director)));
-                    tvDes.setText(Html.fromHtml(getHtml("内容简介：", mVideo.des)));
+                    setTextShow(tvSite, "来源：", ApiConfig.get().getSource(mVideo.sourceKey).getName());
+                    setTextShow(tvYear, "年份：", mVideo.year == 0 ? "" : String.valueOf(mVideo.year));
+                    setTextShow(tvArea, "地区：", mVideo.area);
+                    setTextShow(tvLang, "语言：", mVideo.lang);
+                    setTextShow(tvType, "类型：", mVideo.type);
+                    setTextShow(tvActor, "演员：", mVideo.actor);
+                    setTextShow(tvDirector, "导演：", mVideo.director);
+                    setTextShow(tvDes, "内容简介：", removeHtmlTag(mVideo.des));
                     if (!TextUtils.isEmpty(mVideo.pic)) {
                         Picasso.get()
-                                .load(mVideo.pic)
-                                .transform(new RoundTransformation(mVideo.pic)
+                                .load(DefaultConfig.checkReplaceProxy(mVideo.pic))
+                                .transform(new RoundTransformation(MD5.string2MD5(mVideo.pic + mVideo.name))
                                         .centerCorp(true)
                                         .override(AutoSizeUtils.mm2px(mContext, 300), AutoSizeUtils.mm2px(mContext, 400))
                                         .roundRadius(AutoSizeUtils.mm2px(mContext, 10), RoundTransformation.RoundType.ALL))
-                                .placeholder(R.drawable.error_all_loading)
-                                .error(R.drawable.error_all_loading)
+                                .placeholder(R.drawable.img_loading_placeholder)
+                                .error(R.drawable.img_loading_placeholder)
                                 .into(ivThumb);
                     } else {
-                        ivThumb.setImageResource(R.drawable.error_all_loading);
+                        ivThumb.setImageResource(R.drawable.img_loading_placeholder);
                     }
 
                     if (vodInfo.seriesMap != null && vodInfo.seriesMap.size() > 0) {
@@ -294,9 +327,17 @@ public class DetailActivity extends BaseActivity {
                         if (vodInfoRecord != null) {
                             vodInfo.playIndex = Math.max(vodInfoRecord.playIndex, 0);
                             vodInfo.playFlag = vodInfoRecord.playFlag;
+                            vodInfo.playerCfg = vodInfoRecord.playerCfg;
+                            vodInfo.reverseSort = vodInfoRecord.reverseSort;
                         } else {
                             vodInfo.playIndex = 0;
                             vodInfo.playFlag = null;
+                            vodInfo.playerCfg = "";
+                            vodInfo.reverseSort = false;
+                        }
+
+                        if (vodInfo.reverseSort) {
+                            vodInfo.reverse();
                         }
 
                         if (vodInfo.playFlag == null || !vodInfo.seriesMap.containsKey(vodInfo.playFlag))
@@ -358,17 +399,24 @@ public class DetailActivity extends BaseActivity {
     public void refresh(RefreshEvent event) {
         if (event.type == RefreshEvent.TYPE_REFRESH) {
             if (event.obj != null) {
-                int index = (int) event.obj;
-                if (index != vodInfo.playIndex) {
-                    seriesAdapter.getData().get(vodInfo.playIndex).selected = false;
-                    seriesAdapter.notifyItemChanged(vodInfo.playIndex);
-                    seriesAdapter.getData().get(index).selected = true;
-                    seriesAdapter.notifyItemChanged(index);
-                    mGridView.setSelection(index);
-                    vodInfo.playIndex = index;
+                if (event.obj instanceof Integer) {
+                    int index = (int) event.obj;
+                    if (index != vodInfo.playIndex) {
+                        seriesAdapter.getData().get(vodInfo.playIndex).selected = false;
+                        seriesAdapter.notifyItemChanged(vodInfo.playIndex);
+                        seriesAdapter.getData().get(index).selected = true;
+                        seriesAdapter.notifyItemChanged(index);
+                        mGridView.setSelection(index);
+                        vodInfo.playIndex = index;
+                        //保存历史
+                        insertVod(sourceKey, vodInfo);
+                    }
+                } else if (event.obj instanceof JSONObject) {
+                    vodInfo.playerCfg = ((JSONObject) event.obj).toString();
                     //保存历史
                     insertVod(sourceKey, vodInfo);
                 }
+
             }
         } else if (event.type == RefreshEvent.TYPE_QUICK_SEARCH_SELECT) {
             if (event.obj != null) {
